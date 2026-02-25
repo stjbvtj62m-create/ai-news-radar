@@ -48,7 +48,7 @@ jobs:
       # 6. 飞书通知 (修复了 secrets 报错问题)
       - name: Feishu Notification
         env:
-          FEISHU_URL: ${{ secrets.FEISHU_WEBHOOK }}
+          FEISHU_URL: ${{ SECRETS.FEISHU_WEBHOOK }}
         if: success() && env.FEISHU_URL != ''
         run: |
           curl -X POST -H "Content-Type: application/json" \
@@ -63,15 +63,15 @@ jobs:
       # 7. 邮件通知 (修复了 secrets 报错问题)
       - name: Send Mail Notification
         env:
-          MAIL_USER: ${{ secrets.EMAIL_USER }}
+          MAIL_USER: ${{ SECRETS.EMAIL_USER }}
         if: success() && env.MAIL_USER != ''
         uses: dawidd6/action-send-mail@v3
         with:
-          server_address: ${{ secrets.EMAIL_HOST }}
-          server_port: ${{ secrets.EMAIL_PORT }}
-          username: ${{ secrets.EMAIL_USER }}
-          password: ${{ secrets.EMAIL_PASSWORD }}
+          server_address: ${{ SECRETS.EMAIL_HOST }}
+          server_port: ${{ SECRETS.EMAIL_PORT }}
+          username: ${{ SECRETS.EMAIL_USER }}
+          password: ${{ SECRETS.EMAIL_PASSWORD }}
           subject: "AI News Radar 自动更新成功"
-          to: ${{ secrets.EMAIL_RECEIVER }}
-          from: "AI News Radar <${{ secrets.EMAIL_USER }}>"
+          to: ${{ SECRETS.EMAIL_RECEIVER }}
+          from: "AI News Radar <${{ SECRETS.EMAIL_USER }}>"
           body: "AI 新闻雷达已成功更新。点击查看最新资讯: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/"
