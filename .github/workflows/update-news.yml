@@ -28,6 +28,15 @@ jobs:
       - name: Prepare OPML (optional)
         env:
           FOLLOW_OPML_B64: ${{ secrets.FOLLOW_OPML_B64 }}
+          PUSH_CHANNEL: ${{ secrets.PUSH_CHANNEL }}
+          FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
+          EMAIL_HOST: ${{ secrets.EMAIL_HOST }}
+          EMAIL_PORT: ${{ secrets.EMAIL_PORT }}
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          EMAIL_RECEIVER: ${{ secrets.EMAIL_RECEIVER }}
+          # 如果使用了 AI 翻译，也要带上 Key
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }} 
         run: |
           mkdir -p feeds
           if [ -n "$FOLLOW_OPML_B64" ]; then
