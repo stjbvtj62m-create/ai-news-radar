@@ -36,6 +36,47 @@ jobs:
         run: |
           python scripts/update_news.py --output-dir data --window-hours 24
 
+      # 【新增步骤】：提取 JSON 内容生成邮件 HTML 模板
+      - name: Generate Mail Content
+        id: mail_content
+        run: |
+          python - <<EOF
+          import json
+          import os
+
+          try:
+              # 读取生成的最新 24 小时新闻
+              with open('data/latest-24h.json', 'r', encoding='utf-8') as f:
+                  data = json.load(f)
+              
+              # 构建 HTML 字符串
+              html = "<h2>🚀 AI 新闻雷达摘要</h2>"
+              html += "<p>以下是过去 24 小时的精选内容，点击标题可跳转原文：</p><hr/>"
+              
+              # 只取前 15 条，防止邮件过长
+              for item in data[:15]:
+                  title = item.get('title', '无标题')
+                  url = item.get('url', '#')
+                  summary = item.get('summary', '暂无 AI 摘要')
+                  # 处理可能存在的翻译
+                  title_zh = item.get('title_zh', '')
+                  display_title = title_zh if title_zh else title
+                  
+                  html += f"<div style='margin-bottom: 20px;'>"
+                  html += f"  <h3 style='margin-bottom: 5px;'><a href='{url}'>{display_title}</a></h3>"
+                  html += f"  <p style='color: #666; font-size: 14px;'>{summary}</p>"
+                  html += f"</div>"
+              
+              html += "<hr/><p>🔗 查看完整版: <a href='https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/'>在线雷达页面</a></p>"
+              
+              # 将 HTML 写入文件
+              with open('mail_body.html', 'w', encoding='utf-8') as f:
+                  f.write(html)
+          except Exception as e:
+              with open('mail_body.html', 'w', encoding='utf-8') as f:
+                  f.write(f"提取内容失败，请查看在线链接。错误: {str(e)}")
+          EOF
+
       # 5. 提交数据到仓库
       - name: Commit and Push Changes
         run: |
