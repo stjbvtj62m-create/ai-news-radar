@@ -3,7 +3,7 @@ name: Update AI News Snapshot
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 */1 * * *" # 每小时运行一次，避免过于频繁导致 API 超限
+    - cron: "0 */1 * * *" # 每小时运行一次
 
 permissions:
   contents: write
@@ -12,11 +12,11 @@ jobs:
   update:
     runs-on: ubuntu-latest
     steps:
-      # 1. 下载仓库代码
+      # 1. 下载代码
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 2. 安装 Python 环境
+      # 2. 设置 Python
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -36,7 +36,7 @@ jobs:
         run: |
           python scripts/update_news.py --output-dir data --window-hours 24
 
-      # 5. 提交更新到 GitHub (这一步保证网页内容会变)
+      # 5. 提交数据到仓库
       - name: Commit and Push Changes
         run: |
           git config --global user.name "github-actions[bot]"
@@ -45,9 +45,11 @@ jobs:
           git commit -m "Auto update news data [skip ci]" || echo "No changes to commit"
           git push
 
-      # 6. 【新增】推送消息到飞书
+      # 6. 飞书通知 (修复了 secrets 报错问题)
       - name: Feishu Notification
-        if: success() && secrets.FEISHU_WEBHOOK != ''
+        env:
+          FEISHU_URL: ${{ secrets.FEISHU_WEBHOOK }}
+        if: success() && env.FEISHU_URL != ''
         run: |
           curl -X POST -H "Content-Type: application/json" \
           -d '{
@@ -56,11 +58,13 @@ jobs:
               "text": "📢 AI 新闻雷达已更新！\n🔗 访问地址: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/"
             }
           }' \
-          ${{ secrets.FEISHU_WEBHOOK }}
+          $FEISHU_URL
 
-      # 7. 【新增】推送消息到邮箱
+      # 7. 邮件通知 (修复了 secrets 报错问题)
       - name: Send Mail Notification
-        if: success() && secrets.EMAIL_USER != ''
+        env:
+          MAIL_USER: ${{ secrets.EMAIL_USER }}
+        if: success() && env.MAIL_USER != ''
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: ${{ secrets.EMAIL_HOST }}
