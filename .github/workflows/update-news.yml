@@ -32,11 +32,10 @@ jobs:
         run: |
           python scripts/update_news.py --output-dir data --window-hours 24
 
-      # --- 关键步骤：生成通知内容并保存到本地文件 ---
+      # --- 健壮的内容生成脚本 ---
       - name: Prepare Notifications
         id: prep
         env:
-          # 通过环境变量把网页链接传进 Python，防止 shell 转义报错
           PAGE_URL: "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/"
         run: |
           python - <<EOF
@@ -46,17 +45,35 @@ jobs:
           def run():
               json_path = 'data/latest-24h.json'
               if not os.path.exists(json_path):
-                  print(f"Error: {json_path} not found")
+                  print(f"File not found: {json_path}")
                   return
 
               with open(json_path, 'r', encoding='utf-8') as f:
                   data = json.load(f)
 
+              # 核心修复：自动识别数据结构
+              # 如果 data 是字典，尝试获取里面的列表内容
+              items = []
+              if isinstance(data, list):
+                  items = data
+              elif isinstance(data, dict):
+                  # 尝试常见的 key，或者取第一个是列表的 value
+                  items = data.get('news') or data.get('items') or data.get('data')
+                  if not items:
+                      for val in data.values():
+                          if isinstance(val, list):
+                              items = val
+                              break
+              
+              if not items:
+                  print("Could not find a list of news items in JSON")
+                  items = []
+
               page_url = os.environ.get('PAGE_URL', '')
 
-              # 1. 构建 HTML 邮件正文 (取前 15 条)
-              html = f"<h2>🚀 AI 新闻雷达摘要</h2><p>点击标题跳转原文，更多内容请访问 <a href='{page_url}'>在线页面</a></p><hr/>"
-              for item in data[:15]:
+              # 1. 构建 HTML 邮件 (取前 15 条)
+              html = f"<h2>🚀 AI 新闻雷达摘要</h2><p>更多内容请访问 <a href='{page_url}'>在线页面</a></p><hr/>"
+              for item in items[:15]:
                   title = item.get('title_zh') or item.get('title', '无标题')
                   summary = item.get('summary', '暂无摘要')
                   url = item.get('url', '#')
@@ -66,20 +83,21 @@ jobs:
               with open('mail_body.html', 'w', encoding='utf-8') as f:
                   f.write(html)
 
-              # 2. 构建飞书卡片 JSON (取前 8 条)
-              elements = []
-              for item in data[:8]:
+              # 2. 构建飞书卡片 (取前 8 条)
+              card_elements = []
+              for item in items[:8]:
                   t = item.get('title_zh') or item.get('title', '无标题')
                   s = item.get('summary', '暂无摘要')
-                  elements.append({"tag": "div", "text": {"tag": "lark_md", "content": f"**[{t}]({item['url']})**\n{s}"}})
-                  elements.append({"tag": "hr"})
+                  u = item.get('url', '#')
+                  card_elements.append({"tag": "div", "text": {"tag": "lark_md", "content": f"**[{t}]({u})**\n{s}"}})
+                  card_elements.append({"tag": "hr"})
               
               card = {
                   "msg_type": "interactive",
                   "card": {
                       "config": {"wide_screen_mode": True},
                       "header": {"title": {"tag": "plain_text", "content": "🔥 AI 新闻雷达快讯"}, "template": "blue"},
-                      "elements": elements + [{"tag": "note", "elements": [{"tag": "plain_text", "content": f"🔗 完整版地址: {page_url}"}]}]
+                      "elements": card_elements + [{"tag": "note", "elements": [{"tag": "plain_text", "content": f"🔗 完整版地址: {page_url}"}]}]
                   }
               }
               with open('feishu_card.json', 'w', encoding='utf-8') as f:
@@ -96,13 +114,13 @@ jobs:
           git commit -m "Auto update news data [skip ci]" || echo "No changes to commit"
           git push
 
-      # --- 飞书发送 ---
+      # --- 飞书发送 (使用 FEISHU_URL 参数) ---
       - name: Feishu Notification
         env:
-          URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
-        if: success() && env.URL != ''
+          FEISHU_URL: ${{ secrets.FEISHU_WEBHOOK }}
+        if: success() && env.FEISHU_URL != ''
         run: |
-          curl -X POST -H "Content-Type: application/json" -d @feishu_card.json $URL
+          curl -X POST -H "Content-Type: application/json" -d @feishu_card.json $FEISHU_URL
 
       # --- 邮件发送 ---
       - name: Send Mail Notification
@@ -115,9 +133,7 @@ jobs:
           server_port: ${{ secrets.EMAIL_PORT || 465 }}
           username: ${{ secrets.EMAIL_SENDER }}
           password: ${{ secrets.EMAIL_PASSWORD }}
-          # 更改标题，确保你能识别出是新版本
-          subject: "[精选报告] AI 新闻雷达快讯"
+          subject: "【精选】AI 新闻雷达快讯"
           to: ${{ secrets.EMAIL_RECEIVER || secrets.EMAIL_SENDER }}
           from: "AI News Radar <${{ secrets.EMAIL_SENDER }}>"
-          # 关键：只使用 html_body，不使用 body
           html_body: file://mail_body.html
