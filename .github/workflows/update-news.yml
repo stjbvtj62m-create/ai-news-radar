@@ -3,8 +3,7 @@ name: Update AI News Snapshot
 on:
   workflow_dispatch:
   schedule:
-    # 每天北京时间 08:00 和 20:00 自动触发
-    - cron: "0 0,12 * * *"
+    - cron: "0 0,12 * * *" # 北京时间 08:00 和 20:00
 
 permissions:
   contents: write
@@ -33,7 +32,7 @@ jobs:
         run: |
           python scripts/update_news.py --output-dir data --window-hours 24
 
-      # --- 增强版内容生成：支持 ITHome/金十 格式化时间 (YYYY-MM-DD HH:MM:SS) ---
+      # --- 深度时间探测与格式化脚本 ---
       - name: Prepare Notifications
         id: prep
         env:
@@ -42,91 +41,99 @@ jobs:
           python - <<EOF
           import json
           import os
+          import re
           from datetime import datetime
 
-          def parse_time(item):
-              # 遍历所有可能的键名
-              keys = ['updated_at', 'pubDate', 'date', 'created_at', 'time']
-              raw_time = ""
-              for k in keys:
+          def format_time(item):
+              # 1. 定义所有可能的键名（按优先级排序）
+              possible_keys = ['pubDate', 'date', 'updated_at', 'created_at', 'published', 'time', 'timestamp', 'dt']
+              raw_val = None
+              
+              for k in possible_keys:
                   if item.get(k):
-                      raw_time = str(item.get(k))
+                      raw_val = item.get(k)
                       break
               
-              if not raw_time:
-                  return "近期"
+              # 2. 如果没找到显式键名，尝试遍历所有值，寻找符合日期格式的字符串
+              if not raw_val:
+                  for v in item.values():
+                      if isinstance(v, str) and re.search(r'\d{4}[-/]\d{1,2}[-/]\d{1,2}', v):
+                          raw_val = v
+                          break
 
+              # 3. 如果还是没有，默认使用当前抓取时间（防止显示“近期”）
+              if not raw_val:
+                  return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+              # 4. 格式化处理
               try:
-                  # 1. 处理常见的 ISO 格式 (2026-02-26T18:23:56.000Z)
-                  clean_time = raw_time.replace('T', ' ').replace('Z', '')
-                  if '.' in clean_time:
-                      clean_time = clean_time.split('.')[0]
+                  # 处理时间戳 (int 或 float)
+                  if isinstance(raw_val, (int, float)):
+                      if raw_val > 10**10: raw_val /= 1000 # 毫秒转秒
+                      return datetime.fromtimestamp(raw_val).strftime("%Y-%m-%d %H:%M:%S")
+
+                  # 处理字符串
+                  s = str(raw_val).strip()
+                  # 清洗常见干扰字符
+                  s = s.replace('T', ' ').replace('Z', '').split('+')[0].split('.')[0]
                   
-                  # 2. 如果是 RSS 常见格式 (Thu, 26 Feb 2026 18:23:56 +0800)
-                  # 尝试解析并标准化
-                  if ',' in clean_time and len(clean_time) > 20:
-                      # 简单截取核心时间部分防止 parse 报错，或者直接处理
-                      return clean_time
+                  # 如果是 ITHome 等常见的 Wed, 26 Feb 2026 格式，尝试截取
+                  if ',' in s and len(s) > 15:
+                      return s # 保持原样输出，通常已包含精确时间
                   
-                  # 3. 如果已经是标准格式或接近标准格式，直接返回
-                  if len(clean_time) >= 19:
-                      return clean_time[:19]
-                      
-                  return clean_time
+                  # 强制补全 YYYY-MM-DD HH:MM:SS
+                  if len(s) == 10: s += " 00:00:00"
+                  if len(s) >= 19: return s[:19]
+                  
+                  return s
               except:
-                  return raw_time
+                  return str(raw_val)
 
           def run():
               json_path = 'data/latest-24h.json'
-              if not os.path.exists(json_path):
-                  return
-
+              if not os.path.exists(json_path): return
               with open(json_path, 'r', encoding='utf-8') as f:
                   data = json.load(f)
 
               items = []
-              if isinstance(data, list):
-                  items = data
+              if isinstance(data, list): items = data
               elif isinstance(data, dict):
                   items = data.get('news') or data.get('items') or data.get('data') or list(data.values())[0]
               
               page_url = os.environ.get('PAGE_URL', '')
 
               # 1. 邮件 (取前 20 条)
-              html = f"<h2>🚀 AI 新闻雷达摘要</h2><p>访问 <a href='{page_url}'>在线页面</a> 查看更多</p><hr/>"
+              html = f"<h2>🚀 AI 新闻雷达摘要</h2><p>点击标题跳转原文，更多内容见 <a href='{page_url}'>在线页面</a></p><hr/>"
               for item in items[:20]:
                   title = item.get('title_zh') or item.get('title', '无标题')
                   source = item.get('source', '聚合源')
-                  time_display = parse_time(item)
-                  url = item.get('url', '#')
-                  
-                  html += f"<div style='margin-bottom:15px;'>"
-                  html += f"  <h3 style='margin:0;'><a href='{url}'>{title}</a></h3>"
-                  html += f"  <p style='color:#888; font-size:12px; margin-top:5px;'>来源：{source} | 发布时间：{time_display}</p>"
-                  html += f"</div>"
-              
-              with open('mail_body.html', 'w', encoding='utf-8') as f:
-                  f.write(html)
+                  tm = format_time(item)
+                  u = item.get('url', '#')
+                  html += f"<div style='margin-bottom:15px;'><h3><a href='{u}'>{title}</a></h3>"
+                  html += f"<p style='color:#888; font-size:12px;'>来源：{source} | 时间：{tm}</p></div>"
+              with open('mail_body.html', 'w', encoding='utf-8') as f: f.write(html)
 
-              # 2. 飞书 (取前 10 条)
-              card_elements = []
+              # 2. 飞书卡片 (取前 10 条)
+              elements = []
               for item in items[:10]:
                   t = item.get('title_zh') or item.get('title', '无标题')
                   src = item.get('source', '聚合源')
-                  tm = parse_time(item)
+                  tm = format_time(item)
                   u = item.get('url', '#')
-                  card_elements.append({
+                  elements.append({
                       "tag": "div",
                       "text": {"tag": "lark_md", "content": f"**[{t}]({u})**\n🕒 {tm}  |  📍 {src}"}
                   })
-                  card_elements.append({"tag": "hr"})
+                  elements.append({"tag": "hr"})
               
               card = {
                   "msg_type": "interactive",
                   "card": {
                       "config": {"wide_screen_mode": True},
                       "header": {"title": {"tag": "plain_text", "content": "🔥 AI 新闻快讯"}, "template": "orange"},
-                      "elements": card_elements + [{"tag": "note", "elements": [{"tag": "plain_text", "content": f"查看完整版: {page_url}"}]}]
+                      "elements": elements + [
+                          {"tag": "note", "elements": [{"tag": "lark_md", "content": f"🔗 [查看完整版页面]({page_url})"}]}
+                      ]
                   }
               }
               with open('feishu_card.json', 'w', encoding='utf-8') as f:
@@ -143,7 +150,6 @@ jobs:
           git commit -m "Auto update news data [skip ci]" || echo "No changes to commit"
           git push
 
-      # --- 飞书发送 (使用 FEISHU_WEBHOOK_URL) ---
       - name: Feishu Notification
         env:
           FEISHU_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
@@ -151,7 +157,6 @@ jobs:
         run: |
           curl -X POST -H "Content-Type: application/json" -d @feishu_card.json $FEISHU_URL
 
-      # --- 邮件发送 ---
       - name: Send Mail Notification
         env:
           SENDER: ${{ secrets.EMAIL_SENDER }}
