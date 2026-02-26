@@ -3,7 +3,8 @@ name: Update AI News Snapshot
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 0,12 * * *" # 每天北京时间 08:00 和 20:00 自动触发
+    # 每天北京时间 08:00 和 20:00 自动触发
+    - cron: "0 0,12 * * *"
 
 permissions:
   contents: write
@@ -32,7 +33,7 @@ jobs:
         run: |
           python scripts/update_news.py --output-dir data --window-hours 24
 
-      # --- 修改逻辑：移除摘要，增加时间和来源 ---
+      # --- 增强版内容生成：支持 ITHome/金十 格式化时间 (YYYY-MM-DD HH:MM:SS) ---
       - name: Prepare Notifications
         id: prep
         env:
@@ -41,18 +42,48 @@ jobs:
           python - <<EOF
           import json
           import os
+          from datetime import datetime
+
+          def parse_time(item):
+              # 遍历所有可能的键名
+              keys = ['updated_at', 'pubDate', 'date', 'created_at', 'time']
+              raw_time = ""
+              for k in keys:
+                  if item.get(k):
+                      raw_time = str(item.get(k))
+                      break
+              
+              if not raw_time:
+                  return "近期"
+
+              try:
+                  # 1. 处理常见的 ISO 格式 (2026-02-26T18:23:56.000Z)
+                  clean_time = raw_time.replace('T', ' ').replace('Z', '')
+                  if '.' in clean_time:
+                      clean_time = clean_time.split('.')[0]
+                  
+                  # 2. 如果是 RSS 常见格式 (Thu, 26 Feb 2026 18:23:56 +0800)
+                  # 尝试解析并标准化
+                  if ',' in clean_time and len(clean_time) > 20:
+                      # 简单截取核心时间部分防止 parse 报错，或者直接处理
+                      return clean_time
+                  
+                  # 3. 如果已经是标准格式或接近标准格式，直接返回
+                  if len(clean_time) >= 19:
+                      return clean_time[:19]
+                      
+                  return clean_time
+              except:
+                  return raw_time
 
           def run():
               json_path = 'data/latest-24h.json'
               if not os.path.exists(json_path):
-                  with open('mail_body.html', 'w') as f: f.write("暂无更新内容")
-                  with open('feishu_card.json', 'w') as f: json.dump({}, f)
                   return
 
               with open(json_path, 'r', encoding='utf-8') as f:
                   data = json.load(f)
 
-              # 自动提取列表逻辑
               items = []
               if isinstance(data, list):
                   items = data
@@ -61,37 +92,32 @@ jobs:
               
               page_url = os.environ.get('PAGE_URL', '')
 
-              # 1. 构建 HTML 邮件 (取前 20 条，显示 来源 和 时间)
+              # 1. 邮件 (取前 20 条)
               html = f"<h2>🚀 AI 新闻雷达摘要</h2><p>访问 <a href='{page_url}'>在线页面</a> 查看更多</p><hr/>"
               for item in items[:20]:
                   title = item.get('title_zh') or item.get('title', '无标题')
                   source = item.get('source', '聚合源')
-                  time_str = item.get('time', '')
+                  time_display = parse_time(item)
                   url = item.get('url', '#')
                   
-                  # 移除 summary，仅展示 标题 + 来源 + 时间
                   html += f"<div style='margin-bottom:15px;'>"
                   html += f"  <h3 style='margin:0;'><a href='{url}'>{title}</a></h3>"
-                  html += f"  <p style='color:#888; font-size:12px; margin-top:5px;'>来源：{source} | 时间：{time_str}</p>"
+                  html += f"  <p style='color:#888; font-size:12px; margin-top:5px;'>来源：{source} | 发布时间：{time_display}</p>"
                   html += f"</div>"
               
               with open('mail_body.html', 'w', encoding='utf-8') as f:
                   f.write(html)
 
-              # 2. 构建飞书卡片 (取前 10 条，展示 来源 和 时间)
+              # 2. 飞书 (取前 10 条)
               card_elements = []
               for item in items[:10]:
                   t = item.get('title_zh') or item.get('title', '无标题')
                   src = item.get('source', '聚合源')
-                  tm = item.get('time', '')
+                  tm = parse_time(item)
                   u = item.get('url', '#')
-                  # 飞书 Markdown 格式
                   card_elements.append({
                       "tag": "div",
-                      "text": {
-                          "tag": "lark_md",
-                          "content": f"**[{t}]({u})**\n🕒 {tm}  |  📍 {src}"
-                      }
+                      "text": {"tag": "lark_md", "content": f"**[{t}]({u})**\n🕒 {tm}  |  📍 {src}"}
                   })
                   card_elements.append({"tag": "hr"})
               
@@ -99,7 +125,7 @@ jobs:
                   "msg_type": "interactive",
                   "card": {
                       "config": {"wide_screen_mode": True},
-                      "header": {"title": {"tag": "plain_text", "content": "🔥 AI 新闻快讯 (无摘要版)"}, "template": "orange"},
+                      "header": {"title": {"tag": "plain_text", "content": "🔥 AI 新闻快讯"}, "template": "orange"},
                       "elements": card_elements + [{"tag": "note", "elements": [{"tag": "plain_text", "content": f"查看完整版: {page_url}"}]}]
                   }
               }
@@ -136,7 +162,7 @@ jobs:
           server_port: ${{ secrets.EMAIL_PORT || 465 }}
           username: ${{ secrets.EMAIL_SENDER }}
           password: ${{ secrets.EMAIL_PASSWORD }}
-          subject: "【实时更新】AI 新闻快讯"
+          subject: "【实时更新】AI 新闻雷达"
           to: ${{ secrets.EMAIL_RECEIVER || secrets.EMAIL_SENDER }}
           from: "AI News Radar <${{ secrets.EMAIL_SENDER }}>"
           html_body: file://mail_body.html
