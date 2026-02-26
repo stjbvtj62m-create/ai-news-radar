@@ -3,7 +3,7 @@ name: Update AI News Snapshot
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 */1 * * *"
+    - cron: "0 0,12 * * *" # 每天北京时间 08:00 和 20:00 自动触发
 
 permissions:
   contents: write
@@ -32,7 +32,7 @@ jobs:
         run: |
           python scripts/update_news.py --output-dir data --window-hours 24
 
-      # --- 准备通知内容：邮件展示上限已调整为 20 条 ---
+      # --- 修改逻辑：移除摘要，增加时间和来源 ---
       - name: Prepare Notifications
         id: prep
         env:
@@ -45,7 +45,6 @@ jobs:
           def run():
               json_path = 'data/latest-24h.json'
               if not os.path.exists(json_path):
-                  print(f"File not found: {json_path}")
                   with open('mail_body.html', 'w') as f: f.write("暂无更新内容")
                   with open('feishu_card.json', 'w') as f: json.dump({}, f)
                   return
@@ -53,51 +52,55 @@ jobs:
               with open(json_path, 'r', encoding='utf-8') as f:
                   data = json.load(f)
 
-              # 核心逻辑：确保提取到的是 List 列表
+              # 自动提取列表逻辑
               items = []
               if isinstance(data, list):
                   items = data
               elif isinstance(data, dict):
-                  items = data.get('news') or data.get('items') or data.get('data')
-                  if not items:
-                      for val in data.values():
-                          if isinstance(val, list):
-                              items = val
-                              break
+                  items = data.get('news') or data.get('items') or data.get('data') or list(data.values())[0]
               
-              if not items:
-                  print("Could not find news items list")
-                  items = []
-
               page_url = os.environ.get('PAGE_URL', '')
 
-              # 1. 生成邮件正文 HTML (按要求调整为前 20 条)
-              html = f"<h2>🚀 AI 新闻雷达摘要</h2><p>更多内容请访问 <a href='{page_url}'>在线页面</a></p><hr/>"
+              # 1. 构建 HTML 邮件 (取前 20 条，显示 来源 和 时间)
+              html = f"<h2>🚀 AI 新闻雷达摘要</h2><p>访问 <a href='{page_url}'>在线页面</a> 查看更多</p><hr/>"
               for item in items[:20]:
                   title = item.get('title_zh') or item.get('title', '无标题')
-                  summary = item.get('summary', '暂无摘要')
+                  source = item.get('source', '聚合源')
+                  time_str = item.get('time', '')
                   url = item.get('url', '#')
-                  html += f"<div style='margin-bottom:20px;'><h3><a href='{url}'>{title}</a></h3>"
-                  html += f"<p style='color:#555;'>{summary}</p></div>"
+                  
+                  # 移除 summary，仅展示 标题 + 来源 + 时间
+                  html += f"<div style='margin-bottom:15px;'>"
+                  html += f"  <h3 style='margin:0;'><a href='{url}'>{title}</a></h3>"
+                  html += f"  <p style='color:#888; font-size:12px; margin-top:5px;'>来源：{source} | 时间：{time_str}</p>"
+                  html += f"</div>"
               
               with open('mail_body.html', 'w', encoding='utf-8') as f:
                   f.write(html)
 
-              # 2. 生成飞书卡片 JSON (建议保留前 8 条，防止卡片内容过长超过飞书 20KB 限制)
+              # 2. 构建飞书卡片 (取前 10 条，展示 来源 和 时间)
               card_elements = []
-              for item in items[:8]:
+              for item in items[:10]:
                   t = item.get('title_zh') or item.get('title', '无标题')
-                  s = item.get('summary', '暂无摘要')
+                  src = item.get('source', '聚合源')
+                  tm = item.get('time', '')
                   u = item.get('url', '#')
-                  card_elements.append({"tag": "div", "text": {"tag": "lark_md", "content": f"**[{t}]({u})**\n{s}"}})
+                  # 飞书 Markdown 格式
+                  card_elements.append({
+                      "tag": "div",
+                      "text": {
+                          "tag": "lark_md",
+                          "content": f"**[{t}]({u})**\n🕒 {tm}  |  📍 {src}"
+                      }
+                  })
                   card_elements.append({"tag": "hr"})
               
               card = {
                   "msg_type": "interactive",
                   "card": {
                       "config": {"wide_screen_mode": True},
-                      "header": {"title": {"tag": "plain_text", "content": "🔥 AI 新闻雷达快讯"}, "template": "blue"},
-                      "elements": card_elements + [{"tag": "note", "elements": [{"tag": "plain_text", "content": f"🔗 完整版地址: {page_url}"}]}]
+                      "header": {"title": {"tag": "plain_text", "content": "🔥 AI 新闻快讯 (无摘要版)"}, "template": "orange"},
+                      "elements": card_elements + [{"tag": "note", "elements": [{"tag": "plain_text", "content": f"查看完整版: {page_url}"}]}]
                   }
               }
               with open('feishu_card.json', 'w', encoding='utf-8') as f:
@@ -114,7 +117,7 @@ jobs:
           git commit -m "Auto update news data [skip ci]" || echo "No changes to commit"
           git push
 
-      # --- 飞书发送 (使用 secrets.FEISHU_WEBHOOK_URL) ---
+      # --- 飞书发送 (使用 FEISHU_WEBHOOK_URL) ---
       - name: Feishu Notification
         env:
           FEISHU_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
@@ -133,7 +136,7 @@ jobs:
           server_port: ${{ secrets.EMAIL_PORT || 465 }}
           username: ${{ secrets.EMAIL_SENDER }}
           password: ${{ secrets.EMAIL_PASSWORD }}
-          subject: "【精选】AI 新闻雷达快讯"
+          subject: "【实时更新】AI 新闻快讯"
           to: ${{ secrets.EMAIL_RECEIVER || secrets.EMAIL_SENDER }}
           from: "AI News Radar <${{ secrets.EMAIL_SENDER }}>"
           html_body: file://mail_body.html
