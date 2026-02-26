@@ -32,7 +32,7 @@ jobs:
         run: |
           python scripts/update_news.py --output-dir data --window-hours 24
 
-      # --- 健壮的内容生成脚本 ---
+      # --- 准备通知内容：邮件展示上限已调整为 20 条 ---
       - name: Prepare Notifications
         id: prep
         env:
@@ -46,18 +46,18 @@ jobs:
               json_path = 'data/latest-24h.json'
               if not os.path.exists(json_path):
                   print(f"File not found: {json_path}")
+                  with open('mail_body.html', 'w') as f: f.write("暂无更新内容")
+                  with open('feishu_card.json', 'w') as f: json.dump({}, f)
                   return
 
               with open(json_path, 'r', encoding='utf-8') as f:
                   data = json.load(f)
 
-              # 核心修复：自动识别数据结构
-              # 如果 data 是字典，尝试获取里面的列表内容
+              # 核心逻辑：确保提取到的是 List 列表
               items = []
               if isinstance(data, list):
                   items = data
               elif isinstance(data, dict):
-                  # 尝试常见的 key，或者取第一个是列表的 value
                   items = data.get('news') or data.get('items') or data.get('data')
                   if not items:
                       for val in data.values():
@@ -66,14 +66,14 @@ jobs:
                               break
               
               if not items:
-                  print("Could not find a list of news items in JSON")
+                  print("Could not find news items list")
                   items = []
 
               page_url = os.environ.get('PAGE_URL', '')
 
-              # 1. 构建 HTML 邮件 (取前 15 条)
+              # 1. 生成邮件正文 HTML (按要求调整为前 20 条)
               html = f"<h2>🚀 AI 新闻雷达摘要</h2><p>更多内容请访问 <a href='{page_url}'>在线页面</a></p><hr/>"
-              for item in items[:15]:
+              for item in items[:20]:
                   title = item.get('title_zh') or item.get('title', '无标题')
                   summary = item.get('summary', '暂无摘要')
                   url = item.get('url', '#')
@@ -83,7 +83,7 @@ jobs:
               with open('mail_body.html', 'w', encoding='utf-8') as f:
                   f.write(html)
 
-              # 2. 构建飞书卡片 (取前 8 条)
+              # 2. 生成飞书卡片 JSON (建议保留前 8 条，防止卡片内容过长超过飞书 20KB 限制)
               card_elements = []
               for item in items[:8]:
                   t = item.get('title_zh') or item.get('title', '无标题')
@@ -114,10 +114,10 @@ jobs:
           git commit -m "Auto update news data [skip ci]" || echo "No changes to commit"
           git push
 
-      # --- 飞书发送 (使用 FEISHU_URL 参数) ---
+      # --- 飞书发送 (使用 secrets.FEISHU_WEBHOOK_URL) ---
       - name: Feishu Notification
         env:
-          FEISHU_URL: ${{ secrets.FEISHU_WEBHOOK }}
+          FEISHU_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
         if: success() && env.FEISHU_URL != ''
         run: |
           curl -X POST -H "Content-Type: application/json" -d @feishu_card.json $FEISHU_URL
