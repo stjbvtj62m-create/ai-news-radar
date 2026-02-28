@@ -3,7 +3,7 @@ name: Update AI News Snapshot
 on:
   workflow_dispatch:
   schedule:
-    - cron: "13 3,12 * * *" # 北京时间 08:00 和 20:00
+    - cron: "17 22,10 * * *" # 北京时间 06:00 和 18:00
 
 permissions:
   contents: write
